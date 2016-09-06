@@ -1,7 +1,6 @@
 import numpy as np
 import scipy as sp
 import pandas as pd
-import graphlab as gl
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize as sp_minimize
 from scipy.optimize import newton
@@ -81,8 +80,7 @@ class Model(object):
             print '-'*90
             print '::: initial values:', self.initial_values
             print '::: constraints:', self.constraints
-
-        res = sp_minimize(self, self.initial_values, constraints=self.constraints)
+        res = sp_minimize(self, self.initial_values, constraints=self.constraints, )
 
         if self.debug_level>0:
             print res
@@ -91,7 +89,7 @@ class Model(object):
             
     def m2_log_likelihood_gaus(self, params):
         ## params = [mu, sigma]
-        f1 = 2 * self.n_data * ( np.log(params[1]) + self.log_sqrt_2pi)
+        f1 = 2 * self.n_data * ( np.log(abs(params[1])) + self.log_sqrt_2pi)
         f2_vect = (self.data - params[0])**2 / params[1]**2
         f2 = f2_vect.sum()
         return f1 + f2
@@ -178,10 +176,18 @@ class Model(object):
             delta_chi2 = sp_chi2.ppf(cl, 1)
             
             poi_ci_guess =  self.plr_res.poi_mle + n_sigma * std_poi 
-            max_ci = newton(func, poi_ci_guess, args=(poi_name, delta_chi2))
-            
+            try:
+                max_ci = newton(func, poi_ci_guess, args=(poi_name, delta_chi2), maxiter=1000)
+            except RuntimeError:
+                print '::: Retry finding Confidence Interval with tolerance 0.1'
+                max_ci = newton(func, poi_ci_guess, args=(poi_name, delta_chi2), maxiter=1000, tol=0.1)
+                
             poi_ci_guess =  self.plr_res.poi_mle - n_sigma * std_poi 
-            min_ci = newton(func, poi_ci_guess, args=(poi_name, delta_chi2))
+            try:
+                min_ci = newton(func, poi_ci_guess, args=(poi_name, delta_chi2), maxiter=1000)
+            except RuntimeError:
+                print '::: Retry finding Confidence Interval with tolerance 0.1'
+                min_ci = newton(func, poi_ci_guess, args=(poi_name, delta_chi2), maxiter=1000, tol=0.1)
             
             self.plr_res.cl.append(cl)
             self.plr_res.cl_delta_chi2.append(delta_chi2)
@@ -191,7 +197,7 @@ class Model(object):
             self.plr_res.ci_poi_max.append( max_ci )
             
             if self.debug_level>0:
-                print '::: Newton res:', cl, neg_ci, pos_ci
+                print '::: Newton res:', cl, min_ci, max_ci
             
         return self.plr_res 
     
@@ -278,7 +284,7 @@ class ModelFactory(object):
         self.true_mu = true_mu
         self.true_sigma = true_sigma
         self.output_tag = output_tag
-        self.output_file = 'mod_fact_out_ndata_%i'%self.n_data
+        self.output_file = 'mod_fact_out_ndata_%i_nexp_%i'%(self.n_data, self.n_exp)
         self.dump_attributes()
 
         self.array_plr_res = np.empty(self.n_exp, dtype=Profile_likelihood_ratio_result)
@@ -296,11 +302,11 @@ class ModelFactory(object):
             print st, v
         
     def run(self):
-        np.random.seed(1)
+        np.random.seed(2)
         
         start = timer()
         for i in range(self.n_exp):
-            if not i%10:
+            if not i%100:
                 print '::: Iteration %i (%i to go)'%(i, self.n_exp - i)
             self.array_plr_res[i] = self.runModel()
         end = timer()
@@ -324,32 +330,57 @@ class ModelFactory(object):
         res = model.plr_res
         
         return res
-    
+        
+        
+        
     def create_dict_of_array_result(self):
         start = timer()
         plr_res_attr = self.array_plr_res[0].__dict__.keys()
 
-        for k,v in self.array_plr_res[0].__dict__.iteritems():
-            try:
-                v_len = len(v)
-            except TypeError:
-                v_len = 1
-            if v_len==1:
-                self.dict_of_array_result[k] = np.empty(self.n_exp)
-            else:
-                self.dict_of_array_result[k] = np.empty((self.n_exp, v_len))
-                
+        for k in plr_res_attr:
+            self.dict_of_array_result[k] = []
+        
+        self.dict_of_array_result['true_mu'] = []
+        self.dict_of_array_result['true_sigma'] = []
                 
         for i,res in enumerate(self.array_plr_res):
-            # print '-------------------------------'
+            self.dict_of_array_result['true_mu'].append(self.true_mu)
+            self.dict_of_array_result['true_sigma'].append(self.true_sigma)
             for k in plr_res_attr:
-                if k=='poi_name':
-                    continue
-                # print i, k, res.__dict__[k]
-                self.dict_of_array_result[k][i] = res.__dict__[k]
+                self.dict_of_array_result[k].append(res.__dict__[k])
+
         end = timer()
         print '::: Time to create result dict:', end - start
         return self.dict_of_array_result
+        
+        
+        
+    
+    # def create_dict_of_array_result(self):
+        # start = timer()
+        # plr_res_attr = self.array_plr_res[0].__dict__.keys()
+
+        # for k,v in self.array_plr_res[0].__dict__.iteritems():
+            # try:
+                # v_len = len(v)
+            # except TypeError:
+                # v_len = 1
+            # if v_len==1:
+                # self.dict_of_array_result[k] = np.empty(self.n_exp)
+            # else:
+                # self.dict_of_array_result[k] = np.empty((self.n_exp, v_len))
+                
+                
+        # for i,res in enumerate(self.array_plr_res):
+            # # print '-------------------------------'
+            # for k in plr_res_attr:
+                # if k=='poi_name':
+                    # continue
+                # # print i, k, res.__dict__[k]
+                # self.dict_of_array_result[k][i] = res.__dict__[k]
+        # end = timer()
+        # print '::: Time to create result dict:', end - start
+        # return self.dict_of_array_result
         
     # def create_data_frame_result(self):
         # start = timer()
