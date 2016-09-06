@@ -1,7 +1,15 @@
 import numpy as np
 import scipy as sp
+import pandas as pd
+import graphlab as gl
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize as sp_minimize
+from scipy.optimize import newton
+from scipy.stats import chi2 as sp_chi2
+from scipy.stats import norm as sp_norm
+
+import subprocess
+from timeit import default_timer as timer
 
 
 class Model(object):
@@ -19,6 +27,11 @@ class Model(object):
         self.constraints = ()
         
         self.set_data(np.array([], dtype=float))
+
+                
+    def __call__(self, params):
+        return self.score_function(params)
+        
         
     def set_data(self, data):
         try:
@@ -37,13 +50,7 @@ class Model(object):
                 
         self.data = data
         self.n_data = len(data)
-    
-
-    def reset_constraints(self):
-        self.constraints = ()
-    def set_constraint(self, param_name='0', value=1.):
-        param_num = self.params_dict[param_name]
-        self.constraints += ({'type': 'eq', 'fun': lambda x : x[param_num] - value},)
+        
         
     def set_score_function(self, function_type='m2_log_likelihood_gaus'):
         if function_type=='m2_log_likelihood_gaus':
@@ -54,6 +61,33 @@ class Model(object):
         else:
             print '::: Unknow function type setting f(x) = x.sum()'
             self.score_function = lambda x : x.sum()
+
+            
+    def reset_constraints(self):
+        self.constraints = ()
+    def set_constraint_eq(self, param_name='0', value=1.):
+        param_num = self.params_dict[param_name]
+        self.constraints += ({'type': 'eq', 'fun': lambda x : x[param_num] - value},)
+        
+    def resest_initial_values(self):
+        self.initial_values = [1.]*self.n_params
+    def set_initial_values(self, param_name='0', value=1.):
+        param_num = self.params_dict[param_name]
+        self.initial_values[param_num] = value
+        
+
+    def minimize(self):
+        if self.debug_level>0:
+            print '-'*90
+            print '::: initial values:', self.initial_values
+            print '::: constraints:', self.constraints
+
+        res = sp_minimize(self, self.initial_values, constraints=self.constraints)
+
+        if self.debug_level>0:
+            print res
+        return res
+
             
     def m2_log_likelihood_gaus(self, params):
         ## params = [mu, sigma]
@@ -62,70 +96,281 @@ class Model(object):
         f2 = f2_vect.sum()
         return f1 + f2
     
-    def minimize(self):
-        if self.debug_level>0:
-            print '-'*90
-            print '::: initial values:', self.initial_values
-            print '::: constraints:', self.constraints
-    
-        res = sp_minimize(self, self.initial_values, constraints=self.constraints)
 
-        if self.debug_level>0:
-            print res
-        return res
-        
-    def __call__(self, params):
-        return self.score_function(params)
-
-    def profile_likelihood_ratio_curve(self):
-        ### options
-        param_of_interest = 'mu'
-        poi_n_steps = 50
-        poi_param_num = self.params_dict[param_of_interest]
-        
-        ### create object to store results
-        #plr_res = profile_likelihood_ratio_result()
-        self.plr_res.poi_name = param_of_interest
-        
+    def unconstraint_fit(self, poi_name='mu'):
         ### get MLE
+        self.plr_res.poi_name = poi_name
+        poi_param_num = self.params_dict[poi_name]
+ 
         self.reset_constraints()
+        self.resest_initial_values()
         res_hat = self.minimize() 
+        
         if not res_hat.success:
-            print '::: Minimization Failed!!!!!!'
+            if self.debug_level>0:
+                print '::: Minimization Failed in unconstraint_fit!!!!!!'
+                print res_hat
         self.plr_res.poi_mle = res_hat.x[poi_param_num]
         self.plr_res.score_poi_mle = res_hat.fun
+        self.plr_res.hessian_poi_mle = res_hat.hess_inv[poi_param_num, poi_param_num]
+        
+        return res_hat
+        
+        
+        
+        
+    def profile_likelihood_ratio_curve(self, poi_name='mu', poi_n_steps=50, poi_range_n_sigma=3.):
+        
+        ### get MLE
+        self.plr_res.poi_name = poi_name
+        res_hat = self.unconstraint_fit(poi_name)
         
         ### set poi range for PLR from Hessian 
         ### delta_poi = sqrt(2*H^-1) for -2 ln(L)
         ### -2*log(PLR) as a chi2_1 distribution (chi2=1 => 68%, chi2=4 => 95%)
-        delta_poi = np.sqrt(2*res_hat.hess_inv[poi_param_num, poi_param_num])
-        n_sigma = 3.
-        poi_start =  self.plr_res.poi_mle - n_sigma * delta_poi 
-        poi_stop = self.plr_res.poi_mle + n_sigma * delta_poi 
+        delta_poi = np.sqrt(2*self.plr_res.hessian_poi_mle)
+        poi_start =  self.plr_res.poi_mle - poi_range_n_sigma * delta_poi 
+        poi_stop = self.plr_res.poi_mle + poi_range_n_sigma * delta_poi 
         poi_range = np.linspace(poi_start, poi_stop, poi_n_steps, endpoint=True)
         
         ### Estimate L around MLE
         for i, poi in enumerate(poi_range):
             self.reset_constraints()
-            self.set_constraint(param_of_interest, poi)
+            self.set_constraint_eq(poi_name, poi)
             res = self.minimize()
             if not res.success:
-                print '::: Minimization Failed!!!!!!'
+                print '::: Minimization Failed around MLE!!!!!!'
+                print res
             self.plr_res.pois.append(poi)
             self.plr_res.scores_poi.append(res.fun)
 
-        self.plr_res.compute_plr()
+        self.plr_res.compute_plr_curve()
 
-        return self.plr_res
+        return self.plr_res        
+        
+        
+    def profile_likelihood_ratio_ci(self, poi_name='mu', poi_cl=[0.954499736104, 0.682689492137]):
+        
+        ### get MLE
+        self.plr_res.poi_name = poi_name
+        res_hat = self.unconstraint_fit(poi_name)
+        
+        ### set poi range for PLR from Hessian 
+        ### std_poi = sqrt(2*H^-1) for -2 ln(L)
+        ### -2*log(PLR) as a chi2_1 distribution (chi2=1 => 68%, chi2=4 => 95%)
+        std_poi = np.sqrt(2*self.plr_res.hessian_poi_mle)
+
+        ### Estimate L around MLE
+        def func(poi, poi_name, delta_chi2):
+            self.reset_constraints()
+            self.resest_initial_values()
+            self.set_constraint_eq(poi_name, poi)
+            res = self.minimize()
+            if not res.success:
+                print '::: Minimization Failed in finding Confidence Interval!!!!!!'
+                print res
+            offset = self.plr_res.score_poi_mle + delta_chi2
+            return self(res.x) - offset
+            
+        for i, cl in enumerate(poi_cl):
+            
+            n_sigma = sp_norm.ppf((1+cl)/2)
+            delta_chi2 = sp_chi2.ppf(cl, 1)
+            
+            poi_ci_guess =  self.plr_res.poi_mle + n_sigma * std_poi 
+            max_ci = newton(func, poi_ci_guess, args=(poi_name, delta_chi2))
+            
+            poi_ci_guess =  self.plr_res.poi_mle - n_sigma * std_poi 
+            min_ci = newton(func, poi_ci_guess, args=(poi_name, delta_chi2))
+            
+            self.plr_res.cl.append(cl)
+            self.plr_res.cl_delta_chi2.append(delta_chi2)
+            self.plr_res.cl_n_sigma.append(n_sigma)
+            # self.plr_res.ci_poi.append( (min_ci, max_ci) )
+            self.plr_res.ci_poi_min.append( min_ci )
+            self.plr_res.ci_poi_max.append( max_ci )
+            
+            if self.debug_level>0:
+                print '::: Newton res:', cl, neg_ci, pos_ci
+            
+        return self.plr_res 
     
+
+    def compute_common_stat_on_data(self):
+        n_data = len(self.data)
+        sum_data = self.data.sum()
+        mean_data = sum_data/n_data
+        rs_data = (self.data - mean_data).sum()
+        rss_data = ((self.data - mean_data)**2).sum()
+        var_data = rss_data/n_data
+        std_data = np.sqrt(var_data)
+        corr_var_data = rss_data/(n_data - 1)
+        corr_std_data = np.sqrt(corr_var_data)
+
+        self.plr_res.n_data = n_data
+        self.plr_res.sum_data = sum_data
+        self.plr_res.mean_data = mean_data
+        self.plr_res.rs_data = rs_data
+        self.plr_res.rss_data = rss_data
+        self.plr_res.var_data =  var_data
+        self.plr_res.std_data =  std_data
+        self.plr_res.corr_var_data = corr_var_data
+        self.plr_res.corr_std_data = corr_std_data
+        
+        return self.plr_res
+
+
 class Profile_likelihood_ratio_result(object):
     def __init__(self):
+    
+        ## set by profile_likelihood_ratio_curve and profile_likelihood_ratio_ci
         self.poi_name = 'mu'
         self.poi_mle = 0.
         self.score_poi_mle = 100.
+        self.hessian_poi_mle = 100.
+        
+        ## set by profile_likelihood_ratio_curve
         self.pois = []
         self.scores_poi = []
-    def compute_plr(self):
+        self.plr = []
+        
+        ## set by profile_likelihood_ratio_ci
+        self.cl = []
+        self.cl_delta_chi2 = []
+        self.cl_n_sigma = []
+        # self.ci_poi = []
+        self.ci_poi_max = []
+        self.ci_poi_min = []
+        
+        ## set by compute_common_stat_on_data
+        self.n_data = 0
+        self.sum_data = 0.
+        self.mean_data = 0.
+        self.rs_data = 0.
+        self.rss_data = 0.
+        
+    def compute_plr_curve(self):
         self.plr = [score_poi - self.score_poi_mle for score_poi in self.scores_poi]
 
+    def plot_profile_likehood_curve_and_ci(self):
+        fig = plt.figure(figsize=(7,7))#plt.figure(figsize = (7,7))
+        axe = fig.add_subplot(111)
+        axe.plot(self.pois, self.plr)
+        for delta_chi2 in self.cl_delta_chi2:
+            s1 = axe.axhline(delta_chi2, linewidth=1, color='k')
+        axe.scatter(self.ci_poi_min, self.cl_delta_chi2, marker='x', color='black', s=40, linewidth=2)
+        axe.scatter(self.ci_poi_max, self.cl_delta_chi2, marker='x', color='black', s=40, linewidth=2)
+        axe.set_xlabel(self.poi_name, fontsize='x-large')
+        axe.set_ylabel(r'$-2 \times \ln(\Lambda)$', fontsize='xx-large')
+        axe.set_ylim(bottom=0)
+        fig.tight_layout()
+        fig.show()
+    
+
+    
+class ModelFactory(object):
+    def __init__(self, n_exp=10, n_data=10000, true_mu=0., true_sigma=1.,  function_type='m2_log_likelihood_gaus',
+                    debug_level=0, output_tag='foo'):
+        self.function_type = function_type
+        self.debug_level = debug_level
+        self.n_exp = n_exp
+        self.n_data = n_data
+        self.true_mu = true_mu
+        self.true_sigma = true_sigma
+        self.output_tag = output_tag
+        self.output_file = 'mod_fact_out_ndata_%i'%self.n_data
+        self.dump_attributes()
+
+        self.array_plr_res = np.empty(self.n_exp, dtype=Profile_likelihood_ratio_result)
+        self.dict_of_array_result = {}
+        self.data_frame_result = None
+        
+        subprocess.call(['mkdir', 'results'])
+        subprocess.call(['mkdir', 'results/'+self.output_tag])
+        
+    def dump_attributes(self):
+        attributes = self.__dict__
+        max_lenght_attr = max([len(attr) for attr in attributes.keys()])
+        for attr,v in attributes.iteritems(): 
+            st = '::: %s'%attr + ' '*(max_lenght_attr - len(attr)) + ' :'
+            print st, v
+        
+    def run(self):
+        np.random.seed(1)
+        
+        start = timer()
+        for i in range(self.n_exp):
+            if not i%10:
+                print '::: Iteration %i (%i to go)'%(i, self.n_exp - i)
+            self.array_plr_res[i] = self.runModel()
+        end = timer()
+        print '::: Time to run %i iterations:'%self.n_exp, end - start
+        
+        self.create_dict_of_array_result()
+        self.create_data_frame_result()
+        
+        return self.data_frame_result
+    
+    def runModel(self):
+        data = np.random.normal(self.true_mu, self.true_sigma, self.n_data)
+
+        model = Model()
+        model.debug_level = self.debug_level
+        model.set_data(data)
+        model.set_score_function(self.function_type)
+        model.profile_likelihood_ratio_ci()
+        model.compute_common_stat_on_data()
+        # model.profile_likelihood_ratio_curve()
+        res = model.plr_res
+        
+        return res
+    
+    def create_dict_of_array_result(self):
+        start = timer()
+        plr_res_attr = self.array_plr_res[0].__dict__.keys()
+
+        for k,v in self.array_plr_res[0].__dict__.iteritems():
+            try:
+                v_len = len(v)
+            except TypeError:
+                v_len = 1
+            if v_len==1:
+                self.dict_of_array_result[k] = np.empty(self.n_exp)
+            else:
+                self.dict_of_array_result[k] = np.empty((self.n_exp, v_len))
+                
+                
+        for i,res in enumerate(self.array_plr_res):
+            # print '-------------------------------'
+            for k in plr_res_attr:
+                if k=='poi_name':
+                    continue
+                # print i, k, res.__dict__[k]
+                self.dict_of_array_result[k][i] = res.__dict__[k]
+        end = timer()
+        print '::: Time to create result dict:', end - start
+        return self.dict_of_array_result
+        
+    # def create_data_frame_result(self):
+        # start = timer()
+        # self.data_frame_result = gl.SFrame(self.dict_of_array_result)
+        # end = timer()
+        # print '::: Time to create result data frame:', end - start
+        
+        # self.data_frame_result.save('results/'+self.output_tag + '/' + self.output_file, 'binary')
+        # return self.data_frame_result
+    
+    def create_data_frame_result(self):
+        start = timer()
+        self.data_frame_result = pd.DataFrame(self.dict_of_array_result)
+        end = timer()
+        print '::: Time to create result data frame:', end - start
+        
+        self.data_frame_result.to_pickle('results/'+self.output_tag + '/' + self.output_file)
+        return self.data_frame_result
+    
+
+        
+        
+        
         
