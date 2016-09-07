@@ -24,32 +24,18 @@ class Profile_likelihood_ratio(object):
         self.set_data(data)
         self.set_score_function(self.model)
         
-
-        # self.n_params = 2
-        # self.params_dict = dict([(str(p_num), p_num) for p_num in range(self.n_params)])
-        # self.initial_values = [1.]*self.n_params
-        
-        
-
                 
     def __call__(self, params):
         return self.score_function(params)
         
         
     def set_data(self, data):
-        try:
-            _ = (data + data)**2
-            _ = _.sum()
-        except:
-            print '::: Data isnt good enought! Puting data=np.zeros(100)'
-            data=np.zeros(100)
-            
         if self.debug_level>0:
             print '::: Data type:', type(data)
             try:
                 print '::: Data element dtype:', data.dtype
             except AttributeError:
-                print '::: Data element has no dtype attribute'
+                print '::: Data element has no dtype attribute...'
                 
         self.data = data
         self.n_data = len(data)
@@ -243,7 +229,7 @@ class Profile_likelihood_ratio_result(object):
     
         ## set by profile_likelihood_ratio_curve and profile_likelihood_ratio_ci
         self.poi_name = 'mu'
-        self.poi_mle = 0.
+        self.poi_mle = 100.
         self.score_poi_mle = 100.
         self.hessian_poi_mle = 100.
         
@@ -256,7 +242,6 @@ class Profile_likelihood_ratio_result(object):
         self.cl = []
         self.cl_delta_chi2 = []
         self.cl_n_sigma = []
-        # self.ci_poi = []
         self.ci_poi_max = []
         self.ci_poi_min = []
         
@@ -306,10 +291,17 @@ class Profile_likelihood_ratio_result(object):
     
     
 class Profile_likelihood_ratio_Factory(object):
-    def __init__(self, n_exp=10, n_data=10000, true_mu=0., true_sigma=1., model='m2_log_likelihood_gaus',
-                    debug_level=0, output_tag='foo', confidence_level=[0.954499736104, 0.682689492137]):
+    def __init__(self, n_exp=10, n_data=10000, 
+                       true_mu=0., true_sigma=1., 
+                       data_generator_name='gaus',
+                       model='m2_log_likelihood_gaus', parameter_of_interest='mu',
+                       confidence_level=[0.954499736104, 0.682689492137],
+                       debug_level=0, output_tag='foo',):
+                       
         self.confidence_level = confidence_level
+        self.poi_name = parameter_of_interest
         self.model = model
+        self.data_generator_name = data_generator_name
         self.debug_level = debug_level
         self.n_exp = n_exp
         self.n_data = n_data
@@ -322,6 +314,8 @@ class Profile_likelihood_ratio_Factory(object):
         self.array_plr_res = np.empty(self.n_exp, dtype=Profile_likelihood_ratio_result)
         self.dict_of_array_result = {}
         self.data_frame_result = None
+
+        self.set_data_generator(self.data_generator_name)
         
         subprocess.call(['mkdir', 'results'])
         subprocess.call(['mkdir', 'results/'+self.output_tag])
@@ -333,6 +327,15 @@ class Profile_likelihood_ratio_Factory(object):
             st = '::: %s'%attr + ' '*(max_lenght_attr - len(attr)) + ' :'
             print st, v
         
+        
+    def set_data_generator(self, data_generator_name):
+        if data_generator_name=='gaus':
+            self.data_generator = self.gaus_generator
+        else:
+            print '::: Unknow data generator name, exiting...'
+            sys.exit(1)
+            
+            
     def run(self):
         np.random.seed(2)
         
@@ -350,15 +353,17 @@ class Profile_likelihood_ratio_Factory(object):
         return self.data_frame_result
     
     def runModel(self):
-        data = np.random.normal(self.true_mu, self.true_sigma, self.n_data)
-
-        model = Profile_likelihood_ratio(data=data, model=self.model, debug_level=self.debug_level)
-        # model.debug_level = self.debug_level
-        # model.set_data(data)
-        # model.set_score_function(self.model)
-        model.profile_likelihood_ratio_confidence_interval(poi_cl=self.confidence_level)
+        # data = np.random.normal(self.true_mu, self.true_sigma, self.n_data)
+        data = self.data_generator()
+        
+        model = Profile_likelihood_ratio(data=data, 
+                                         model=self.model,
+                                         debug_level=self.debug_level
+                                         )
+        model.profile_likelihood_ratio_confidence_interval(poi_name=self.poi_name, 
+                                                           poi_cl=self.confidence_level
+                                                           )
         model.compute_common_stat_on_data()
-        # model.profile_likelihood_ratio_curve()
         res = model.plr_res
         
         return res
@@ -371,13 +376,14 @@ class Profile_likelihood_ratio_Factory(object):
 
         for k in plr_res_attr:
             self.dict_of_array_result[k] = []
-        
-        self.dict_of_array_result['true_mu'] = []
-        self.dict_of_array_result['true_sigma'] = []
+        for k in self.true_params_dict.keys():
+            self.dict_of_array_result[k] = []
                 
         for i,res in enumerate(self.array_plr_res):
-            self.dict_of_array_result['true_mu'].append(self.true_mu)
-            self.dict_of_array_result['true_sigma'].append(self.true_sigma)
+            for k in self.true_params_dict.keys():
+                self.dict_of_array_result[k] = self.true_params_dict[k]
+            # self.dict_of_array_result['true_mu'].append(self.true_mu)
+            # self.dict_of_array_result['true_sigma'].append(self.true_sigma)
             for k in plr_res_attr:
                 self.dict_of_array_result[k].append(res.__dict__[k])
 
@@ -395,6 +401,15 @@ class Profile_likelihood_ratio_Factory(object):
         self.data_frame_result.to_pickle('results/'+self.output_tag + '/' + self.output_file)
         return self.data_frame_result
     
+    
+    def gaus_generator(self):
+        mu = 0.
+        sigma = 1.
+        self.true_params_dict = {'true_mu': mu, 'true_sigma': sigma}
+        data = np.random.normal(mu, sigma, self.n_data)
+        return data
+        
+        
     # def create_dict_of_array_result(self):
         # start = timer()
         # plr_res_attr = self.array_plr_res[0].__dict__.keys()
