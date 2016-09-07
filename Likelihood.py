@@ -7,25 +7,30 @@ from scipy.optimize import newton
 from scipy.stats import chi2 as sp_chi2
 from scipy.stats import norm as sp_norm
 
+from matplotlib.text import Text
 import subprocess
 from timeit import default_timer as timer
+import sys
 
 
-class Model(object):
-    def __init__(self):
-        self.debug_level = 0 
+class Profile_likelihood_ratio(object):
+    def __init__(self, data=np.array([], dtype=float), model='m2_log_likelihood_gaus', debug_level=0, tag='foo'):
+        self.debug_level = debug_level
+        self.tag = tag
+        self.model = model
         self.log_sqrt_2pi = np.log(np.sqrt(2*np.pi))
- 
-        self.set_score_function()
         self.plr_res = Profile_likelihood_ratio_result()
-
-        self.n_params = 2
-        self.params_dict = dict([(str(p_num), p_num) for p_num in range(self.n_params)])
-        self.initial_values = [1.]*self.n_params
-        
         self.constraints = ()
+
+        self.set_data(data)
+        self.set_score_function(self.model)
         
-        self.set_data(np.array([], dtype=float))
+
+        # self.n_params = 2
+        # self.params_dict = dict([(str(p_num), p_num) for p_num in range(self.n_params)])
+        # self.initial_values = [1.]*self.n_params
+        
+        
 
                 
     def __call__(self, params):
@@ -51,15 +56,15 @@ class Model(object):
         self.n_data = len(data)
         
         
-    def set_score_function(self, function_type='m2_log_likelihood_gaus'):
-        if function_type=='m2_log_likelihood_gaus':
+    def set_score_function(self, model='m2_log_likelihood_gaus'):
+        if model=='m2_log_likelihood_gaus':
             self.n_params = 2
             self.initial_values = [1.]*self.n_params
             self.params_dict = {'mu': 0, 'sigma': 1}
             self.score_function = self.m2_log_likelihood_gaus
         else:
-            print '::: Unknow function type setting f(x) = x.sum()'
-            self.score_function = lambda x : x.sum()
+            print '::: Unknow function type, exiting...'
+            sys.exit(1)
 
             
     def reset_constraints(self):
@@ -85,14 +90,6 @@ class Model(object):
         if self.debug_level>0:
             print res
         return res
-
-            
-    def m2_log_likelihood_gaus(self, params):
-        ## params = [mu, sigma]
-        f1 = 2 * self.n_data * ( np.log(abs(params[1])) + self.log_sqrt_2pi)
-        f2_vect = (self.data - params[0])**2 / params[1]**2
-        f2 = f2_vect.sum()
-        return f1 + f2
     
 
     def unconstraint_fit(self, poi_name='mu'):
@@ -147,7 +144,7 @@ class Model(object):
         return self.plr_res        
         
         
-    def profile_likelihood_ratio_ci(self, poi_name='mu', poi_cl=[0.954499736104, 0.682689492137]):
+    def profile_likelihood_ratio_confidence_interval(self, poi_name='mu', poi_cl=[0.954499736104, 0.682689492137]):
         
         ### get MLE
         self.plr_res.poi_name = poi_name
@@ -192,7 +189,6 @@ class Model(object):
             self.plr_res.cl.append(cl)
             self.plr_res.cl_delta_chi2.append(delta_chi2)
             self.plr_res.cl_n_sigma.append(n_sigma)
-            # self.plr_res.ci_poi.append( (min_ci, max_ci) )
             self.plr_res.ci_poi_min.append( min_ci )
             self.plr_res.ci_poi_max.append( max_ci )
             
@@ -224,8 +220,22 @@ class Model(object):
         self.plr_res.corr_std_data = corr_std_data
         
         return self.plr_res
+        
+        
+    def m2_log_likelihood_gaus(self, params):
+        ## params = [mu, sigma]
+        f1 = 2 * self.n_data * ( np.log(abs(params[1])) + self.log_sqrt_2pi)
+        f2_vect = (self.data - params[0])**2 / params[1]**2
+        f2 = f2_vect.sum()
+        return f1 + f2
 
-
+        
+        
+        
+        
+        
+        
+        
 class Profile_likelihood_ratio_result(object):
     def __init__(self):
     
@@ -258,26 +268,37 @@ class Profile_likelihood_ratio_result(object):
     def compute_plr_curve(self):
         self.plr = [score_poi - self.score_poi_mle for score_poi in self.scores_poi]
 
-    def plot_profile_likehood_curve_and_ci(self):
+    def plot_profile_likehood_curve_and_confidence_interval(self, output_path='./plr_curve'):
+        poi_name = self.poi_name
+        
         fig = plt.figure(figsize=(7,7))#plt.figure(figsize = (7,7))
         axe = fig.add_subplot(111)
-        axe.plot(self.pois, self.plr)
+        axe.plot(self.pois, self.plr, color='k')
         for delta_chi2 in self.cl_delta_chi2:
-            s1 = axe.axhline(delta_chi2, linewidth=1, color='k')
+            axe.axhline(delta_chi2, linewidth=1, color='k')
         axe.scatter(self.ci_poi_min, self.cl_delta_chi2, marker='x', color='black', s=40, linewidth=2)
         axe.scatter(self.ci_poi_max, self.cl_delta_chi2, marker='x', color='black', s=40, linewidth=2)
-        axe.set_xlabel(self.poi_name, fontsize='x-large')
-        axe.set_ylabel(r'$-2 \times \ln(\Lambda)$', fontsize='xx-large')
+        
+        axe.set_xlabel(r'$\mathregular{%s}$'%poi_name, fontsize='xx-large')
+        axe.set_ylabel(r'$\mathregular{-2 \times \ln(\Lambda)}$', fontsize='xx-large')
         axe.set_ylim(bottom=0)
+        
+        textstr = '$\mathregular{%s}$ = %.4f'%(poi_name, self.poi_mle)
+        for cl, min_, max_ in zip(self.cl, self.ci_poi_min, self.ci_poi_max):
+            textstr+= '\n%i%% CL: [%.4f, %.4f]'%(cl*100, min_, max_)
+        props = dict(boxstyle='square', facecolor='w', alpha=0.5)
+        axe.text(1.05, 0.95, textstr, transform=axe.transAxes, fontsize=16, verticalalignment='top', bbox=props)
+        
         fig.tight_layout()
-        fig.show()
-    
+        plt.show()
+        fig.savefig(output_path + '.pdf')
 
     
-class ModelFactory(object):
-    def __init__(self, n_exp=10, n_data=10000, true_mu=0., true_sigma=1.,  function_type='m2_log_likelihood_gaus',
-                    debug_level=0, output_tag='foo'):
-        self.function_type = function_type
+class Profile_likelihood_ratio_Factory(object):
+    def __init__(self, n_exp=10, n_data=10000, true_mu=0., true_sigma=1., model='m2_log_likelihood_gaus',
+                    debug_level=0, output_tag='foo', confidence_level=[0.954499736104, 0.682689492137]):
+        self.confidence_level = confidence_level
+        self.model = model
         self.debug_level = debug_level
         self.n_exp = n_exp
         self.n_data = n_data
@@ -320,11 +341,11 @@ class ModelFactory(object):
     def runModel(self):
         data = np.random.normal(self.true_mu, self.true_sigma, self.n_data)
 
-        model = Model()
-        model.debug_level = self.debug_level
-        model.set_data(data)
-        model.set_score_function(self.function_type)
-        model.profile_likelihood_ratio_ci()
+        model = Profile_likelihood_ratio(data=data, model=self.model, debug_level=self.debug_level)
+        # model.debug_level = self.debug_level
+        # model.set_data(data)
+        # model.set_score_function(self.model)
+        model.profile_likelihood_ratio_confidence_interval(poi_cl=self.confidence_level)
         model.compute_common_stat_on_data()
         # model.profile_likelihood_ratio_curve()
         res = model.plr_res
@@ -354,7 +375,14 @@ class ModelFactory(object):
         return self.dict_of_array_result
         
         
+    def create_data_frame_result(self):
+        start = timer()
+        self.data_frame_result = pd.DataFrame(self.dict_of_array_result)
+        end = timer()
+        print '::: Time to create result data frame:', end - start
         
+        self.data_frame_result.to_pickle('results/'+self.output_tag + '/' + self.output_file)
+        return self.data_frame_result
     
     # def create_dict_of_array_result(self):
         # start = timer()
@@ -391,15 +419,21 @@ class ModelFactory(object):
         # self.data_frame_result.save('results/'+self.output_tag + '/' + self.output_file, 'binary')
         # return self.data_frame_result
     
-    def create_data_frame_result(self):
-        start = timer()
-        self.data_frame_result = pd.DataFrame(self.dict_of_array_result)
-        end = timer()
-        print '::: Time to create result data frame:', end - start
-        
-        self.data_frame_result.to_pickle('results/'+self.output_tag + '/' + self.output_file)
-        return self.data_frame_result
-    
+
+# ## need to use deg=3 and filter values outside x range
+# def quadratic_intersections(p, q):
+    # """Given two quadratics p and q, determines the points of intersection"""
+    # x = np.roots(np.asarray(p) - np.asarray(q))
+    # y = np.polyval(p, x)
+    # return x, y
+
+# poly = np.polyfit(res.pois, res.plr, deg=2)
+# y_int  = np.polyval(poly, res.pois)
+# ix_1 = quadratic_intersections(poly, [ 0, 0, 1])
+# ix_4 = quadratic_intersections(poly, [ 0, 0, 4])
+# plt.scatter(*ix_4, marker='x', color='black', s=40, linewidth=2)
+# print ix_1
+# print ix_4
 
         
         
