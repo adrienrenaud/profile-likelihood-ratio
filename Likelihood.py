@@ -7,7 +7,6 @@ from scipy.optimize import newton
 from scipy.stats import chi2 as sp_chi2
 from scipy.stats import norm as sp_norm
 
-from matplotlib.text import Text
 import subprocess
 from timeit import default_timer as timer
 import sys
@@ -236,6 +235,9 @@ class Profile_likelihood_ratio(object):
         
         
         
+        
+        
+        
 class Profile_likelihood_ratio_result(object):
     def __init__(self):
     
@@ -293,6 +295,15 @@ class Profile_likelihood_ratio_result(object):
         plt.show()
         fig.savefig(output_path + '.pdf')
 
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
 class Profile_likelihood_ratio_Factory(object):
     def __init__(self, n_exp=10, n_data=10000, true_mu=0., true_sigma=1., model='m2_log_likelihood_gaus',
