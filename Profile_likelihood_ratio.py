@@ -1,3 +1,28 @@
+"""A Python tool for profile likelihood ratio.
+
+
+
+Usage:
+    Profile_likelihood_ratio:
+        mu = 0.; sigma = 1.; n_data = 1000
+        data = np.random.normal(mu, sigma, n_data)
+        plr = Profile_likelihood_ratio(data=data, model='m2_log_likelihood_gaus', debug_level=0)
+                                        plr.profile_likelihood_ratio_confidence_interval(poi_cl=[0.954499736104, 0.682689492137])
+        plr.compute_common_stat_on_data()
+        plr.profile_likelihood_ratio_curve()
+        plr.plr_res.plot_profile_likehood_curve_and_confidence_interval()
+    Profile_likelihood_ratio_Factory:
+        plr_fatory = Profile_likelihood_ratio_Factory(n_exp=1000, n_data=1000, 
+                                                        data_generator_name='gaus',
+                                                        model='m2_log_likelihood_gaus',
+                                                        confidence_level=[0.954499736104, 0.682689492137],
+                                                        parameter_of_interest='mu',
+                                                        debug_level=0, output_tag='bar')
+        df = plr_fatory.run()
+"""
+
+
+
 import numpy as np
 import scipy as sp
 import pandas as pd
@@ -12,8 +37,30 @@ from timeit import default_timer as timer
 import sys
 
 
+
+
+
 class Profile_likelihood_ratio(object):
+    """Compute profile likelihood ratio.
+    
+    Initialized with a model and some data.
+    Compute MLE of the parameters with unconstraint_fit().
+    Compute profile likelihood ratio with profile_likelihood_ratio_curve().
+    Compute confidence interval for the parameter of interest (poi) 
+    using Wilks' theorem with profile_likelihood_ratio_confidence_interval().
+    Results are stored in a instance of the Profile_likelihood_ratio_result class.
+    """
+    
     def __init__(self, data=np.array([], dtype=float), model='m2_log_likelihood_gaus', debug_level=0, tag='foo'):
+        """Creates a Profile_likelihood_ratio.
+        
+        Args:
+            data: data to fit.
+            model: a string referencing a model, 
+                needs to be available in set_score_function().
+            debug_level: an integer to set the verbosity
+            tag: a string to be added to the output file name
+        """
         self.debug_level = debug_level
         self.tag = tag
         self.model = model
@@ -26,10 +73,22 @@ class Profile_likelihood_ratio(object):
         
                 
     def __call__(self, params):
+        """To make a Profile_likelihood_ratio callable.
+        Wrapper around score_function()
+        Args: 
+            params: the parameters of the model
+        Returns:
+            self.score_function(params): the model evaluated at params
+        """
         return self.score_function(params)
         
         
     def set_data(self, data):
+        """Set data and n_data
+        
+        Args:
+            data: the data
+        """
         if self.debug_level>0:
             print '::: Data type:', type(data)
             try:
@@ -42,6 +101,13 @@ class Profile_likelihood_ratio(object):
         
         
     def set_score_function(self, model='m2_log_likelihood_gaus'):
+        """Set self.score_function to the desired model.
+        Set number of parameters and a dict of {'parameter_name': parameter_number}.
+        Need to be edited by user to reference a new model.
+        
+        Args:
+            model: a string referencing a model. 
+        """
         if model=='m2_log_likelihood_gaus':
             self.n_params = 2
             self.initial_values = [1.]*self.n_params
@@ -53,19 +119,41 @@ class Profile_likelihood_ratio(object):
 
             
     def reset_constraints(self):
+        """Delete the constraints on the parameters."""
         self.constraints = ()
+        
     def set_constraint_eq(self, param_name='0', value=1.):
+        """Set an equality constraint on a parameter.
+        Args:
+            param_name: the name of parameter.
+            value: the value of the parameter.
+        """
         param_num = self.params_dict[param_name]
         self.constraints += ({'type': 'eq', 'fun': lambda x : x[param_num] - value},)
         
+        
     def resest_initial_values(self):
+        """Reset the parameters initial values"""
         self.initial_values = [1.]*self.n_params
+        
     def set_initial_values(self, param_name='0', value=1.):
+        """Set the initial value of a parameter.
+        Args:
+            param_name: the name of parameter.
+            value: the value of the parameter.
+        """
         param_num = self.params_dict[param_name]
         self.initial_values[param_num] = value
         
 
     def minimize(self):
+        """Minimise self.score_function,
+        given the initial values and the constraints
+        using scipy.optimize.minimize.
+        
+        Returns:
+            res: the scipy.optimize.OptimizeResult (a dict).
+        """
         if self.debug_level>0:
             print '-'*90
             print '::: initial values:', self.initial_values
@@ -78,7 +166,19 @@ class Profile_likelihood_ratio(object):
     
 
     def unconstraint_fit(self, poi_name='mu'):
-        ### get MLE
+        """Unconstraint fit to get MLE.
+        
+        Sets:
+            self.plr_res.poi_name
+            self.plr_res.poi_mle
+            self.plr_res.score_poi_mle
+            self.plr_res.hessian_poi_mle
+        Args:
+            poi_name: name of the parameter of interest.
+        Returns:
+            res_hat: the scipy.optimize.OptimizeResult (a dict).
+        
+        """
         self.plr_res.poi_name = poi_name
         poi_param_num = self.params_dict[poi_name]
  
@@ -97,20 +197,31 @@ class Profile_likelihood_ratio(object):
         return res_hat
         
         
-        
-        
     def profile_likelihood_ratio_curve(self, poi_name='mu', poi_n_steps=50, poi_range_n_sigma=3.):
-        
+        """Compute the profile_likelihood_ratio_curve.
+            
+        Args:
+            poi_name: name of the parameter of interest.
+            poi_n_steps: number of points in the curve.
+            poi_range_n_sigma: number of std around the MLE for the curve range,
+                std of the poi is estimated using the Hessian (std_poi = sqrt(2*H^-1) for -2 ln(L)).
+        returns:
+            self.plr_res: Profile_likelihood_ratio_result instance.
+        Sets:
+            self.plr_res.poi_name
+            self.plr_res.pois
+            self.plr_res.poi_scores
+            self.plr_res.plr_curve
+        """
         ### get MLE
         self.plr_res.poi_name = poi_name
         res_hat = self.unconstraint_fit(poi_name)
         
         ### set poi range for PLR from Hessian 
-        ### delta_poi = sqrt(2*H^-1) for -2 ln(L)
-        ### -2*log(PLR) as a chi2_1 distribution (chi2=1 => 68%, chi2=4 => 95%)
-        delta_poi = np.sqrt(2*self.plr_res.hessian_poi_mle)
-        poi_start =  self.plr_res.poi_mle - poi_range_n_sigma * delta_poi 
-        poi_stop = self.plr_res.poi_mle + poi_range_n_sigma * delta_poi 
+        ### std_poi = sqrt(2*H^-1) for -2 ln(L)
+        std_poi = np.sqrt(2*self.plr_res.hessian_poi_mle)
+        poi_start =  self.plr_res.poi_mle - poi_range_n_sigma * std_poi 
+        poi_stop = self.plr_res.poi_mle + poi_range_n_sigma * std_poi 
         poi_range = np.linspace(poi_start, poi_stop, poi_n_steps, endpoint=True)
         
         ### Estimate L around MLE
@@ -130,7 +241,24 @@ class Profile_likelihood_ratio(object):
         
         
     def profile_likelihood_ratio_confidence_interval(self, poi_name='mu', poi_cl=[0.954499736104, 0.682689492137]):
-        
+        """Compute the confidence intrerval using profile likelihood ratio
+        and wilks theorem: -2*log(PLR) as a chi2_1 distribution.
+        CI are found using scipy.optimize.newton, finding poi that verify
+        -2*log(PLR(poi))= sp_chi2.ppf(cl, 1).
+            
+        Args:
+            poi_name: name of the parameter of interest.
+            poi_cl: a list of confidence levels.
+        returns:
+            self.plr_res: Profile_likelihood_ratio_result instance.
+        Sets:
+            self.plr_res.poi_name
+            self.plr_res.cl
+            self.plr_res.cl_delta_chi2
+            self.plr_res.cl_n_sigma
+            self.plr_res.ci_poi_min
+            self.plr_res.ci_poi_max
+        """        
         ### get MLE
         self.plr_res.poi_name = poi_name
         res_hat = self.unconstraint_fit(poi_name)
@@ -184,6 +312,7 @@ class Profile_likelihood_ratio(object):
     
 
     def compute_common_stat_on_data(self):
+        """Compute common statistics on the data"""
         n_data = len(self.data)
         sum_data = self.data.sum()
         mean_data = sum_data/n_data
@@ -208,6 +337,15 @@ class Profile_likelihood_ratio(object):
         
         
     def m2_log_likelihood_gaus(self, params):
+        """The model.
+        User can implement his own model.
+        
+        Args:
+            params: model parameters
+        Return:
+            f1+f2: -2*log(Likelihood(params|data))
+            
+        """
         ## params = [mu, sigma]
         f1 = 2 * self.n_data * ( np.log(abs(params[1])) + self.log_sqrt_2pi)
         f2_vect = (self.data - params[0])**2 / params[1]**2
@@ -221,12 +359,24 @@ class Profile_likelihood_ratio(object):
         
         
         
-        
-        
-        
 class Profile_likelihood_ratio_result(object):
+    """A class to store the results of a Profile_likelihood_ratio instance."""
     def __init__(self):
-    
+        """
+        Sets:
+            poi_name: name of the parameter of interest (poi).
+            poi_mle: maximum likelihood estimate (mle) of poi.
+            score_poi_mle: likelihood (li) at poi mle.
+            hessian_poi_mle: hessian at poi mle.
+            pois: values of poi (for plr curve).
+            socres_poi: values of li at self.pois (for plr curve).
+            plr_curve: values of plr at self.pois (for plr curve).
+            cl: list of confidence intervals (cl).
+            cl_delta_chi2: list of delta_chi2 at self.cl (scipy.chi2.ppf(cl, 1)).
+            cl_n_sigma: list of n_sigma at self.cl (scipy.norm.ppf((1+cl)/2)).
+            cl_poi_max: list of uper bounds of sel.cl.
+            cl_poi_min: list of lower bounds of sel.cl.
+        """
         ## set by profile_likelihood_ratio_curve and profile_likelihood_ratio_ci
         self.poi_name = 'mu'
         self.poi_mle = 100.
@@ -236,7 +386,7 @@ class Profile_likelihood_ratio_result(object):
         ## set by profile_likelihood_ratio_curve
         self.pois = []
         self.scores_poi = []
-        self.plr = []
+        self.plr_curve = []
         
         ## set by profile_likelihood_ratio_ci
         self.cl = []
@@ -252,15 +402,19 @@ class Profile_likelihood_ratio_result(object):
         self.rs_data = 0.
         self.rss_data = 0.
         
+        
     def compute_plr_curve(self):
-        self.plr = [score_poi - self.score_poi_mle for score_poi in self.scores_poi]
+        """Compute the profile_likehood_curve."""
+        self.plr_curve = [score_poi - self.score_poi_mle for score_poi in self.scores_poi]
 
+        
     def plot_profile_likehood_curve_and_confidence_interval(self, output_path='./plr_curve'):
+        """Plot the profile_likehood_curve and the confidence intervals."""
         poi_name = self.poi_name
         
         fig = plt.figure(figsize=(7,7))#plt.figure(figsize = (7,7))
         axe = fig.add_subplot(111)
-        axe.plot(self.pois, self.plr, color='k')
+        axe.plot(self.pois, self.plr_curve, color='k')
         for delta_chi2 in self.cl_delta_chi2:
             axe.axhline(delta_chi2, linewidth=1, color='k')
         axe.scatter(self.ci_poi_min, self.cl_delta_chi2, marker='x', color='black', s=40, linewidth=2)
@@ -286,17 +440,29 @@ class Profile_likelihood_ratio_result(object):
     
     
     
-    
-    
-    
-    
 class Profile_likelihood_ratio_Factory(object):
+    """A factory of Profile_likelihood_ratio.
+    
+    Used to do coverage studies, 
+    or distribution sampling of PLR.
+    """
     def __init__(self, n_exp=10, n_data=10000, 
-                       true_mu=0., true_sigma=1., 
                        data_generator_name='gaus',
                        model='m2_log_likelihood_gaus', parameter_of_interest='mu',
                        confidence_level=[0.954499736104, 0.682689492137],
                        debug_level=0, output_tag='foo',):
+        """Creates a Profile_likelihood_ratio_Factory.
+        
+        Args:
+            n_exp: number of experiments to be done.
+            n_data: number of data points.
+            data_generator_name: string referencing the name of the data_generator.
+            model: string referencing the model.
+            parameter_of_interest: name of the parameter of interest.
+            confidence_level: list of confidence levels.
+            debug_level: verbosity level.
+            output_tag: name of the directory where results are saved.
+        """
                        
         self.confidence_level = confidence_level
         self.poi_name = parameter_of_interest
@@ -305,8 +471,8 @@ class Profile_likelihood_ratio_Factory(object):
         self.debug_level = debug_level
         self.n_exp = n_exp
         self.n_data = n_data
-        self.true_mu = true_mu
-        self.true_sigma = true_sigma
+        # self.true_mu = true_mu
+        # self.true_sigma = true_sigma
         self.output_tag = output_tag
         self.output_file = 'mod_fact_out_ndata_%i_nexp_%i'%(self.n_data, self.n_exp)
         self.dump_attributes()
@@ -320,7 +486,9 @@ class Profile_likelihood_ratio_Factory(object):
         subprocess.call(['mkdir', 'results'])
         subprocess.call(['mkdir', 'results/'+self.output_tag])
         
+        
     def dump_attributes(self):
+        """Dump the attributes of the instance."""
         attributes = self.__dict__
         max_lenght_attr = max([len(attr) for attr in attributes.keys()])
         for attr,v in attributes.iteritems(): 
@@ -329,6 +497,12 @@ class Profile_likelihood_ratio_Factory(object):
         
         
     def set_data_generator(self, data_generator_name):
+        """Set the data generator.
+        User can edit to implement his own generator.
+        
+        Args:
+            data_generator_name: string referencing the name of the data_generator.
+        """
         if data_generator_name=='gaus':
             self.data_generator = self.gaus_generator
         else:
@@ -337,13 +511,18 @@ class Profile_likelihood_ratio_Factory(object):
             
             
     def run(self):
+        """Run the Factory.
+        
+        Returns:
+            self.data_frame_result: a pandas dataframe containing the results.
+        """
         np.random.seed(2)
         
         start = timer()
         for i in range(self.n_exp):
             if not i%100:
                 print '::: Iteration %i (%i to go)'%(i, self.n_exp - i)
-            self.array_plr_res[i] = self.runModel()
+            self.array_plr_res[i] = self.runPLR()
         end = timer()
         print '::: Time to run %i iterations:'%self.n_exp, end - start
         
@@ -352,7 +531,13 @@ class Profile_likelihood_ratio_Factory(object):
         
         return self.data_frame_result
     
-    def runModel(self):
+    
+    def runPLR(self):
+        """Run a Profile_likelihood_ratio.
+        
+        Returns:
+            res: a Profile_likelihood_ratio_result instance.
+        """
         # data = np.random.normal(self.true_mu, self.true_sigma, self.n_data)
         data = self.data_generator()
         
@@ -369,8 +554,12 @@ class Profile_likelihood_ratio_Factory(object):
         return res
         
         
-        
     def create_dict_of_array_result(self):
+        """Create a dict containing the results (before creating a dataframe)
+        
+        Returns:
+            self.dict_of_array_result: a dict containing the results.
+        """
         start = timer()
         plr_res_attr = self.array_plr_res[0].__dict__.keys()
 
@@ -393,6 +582,11 @@ class Profile_likelihood_ratio_Factory(object):
         
         
     def create_data_frame_result(self):
+        """Create a pandas dataframe containing the results.
+        
+        Returns:
+            self.data_frame_result: a pandas dataframe containing the results.
+        """
         start = timer()
         self.data_frame_result = pd.DataFrame(self.dict_of_array_result)
         end = timer()
@@ -403,65 +597,18 @@ class Profile_likelihood_ratio_Factory(object):
     
     
     def gaus_generator(self):
+        """"The data generator.
+        User can implement is hown generator.
+        
+        Returns:
+            data: the data to fit.
+        Sets:
+            self.true_params_dict: a dict containing the parameters true values.
+        """
         mu = 0.
         sigma = 1.
         self.true_params_dict = {'true_mu': mu, 'true_sigma': sigma}
         data = np.random.normal(mu, sigma, self.n_data)
         return data
         
-        
-    # def create_dict_of_array_result(self):
-        # start = timer()
-        # plr_res_attr = self.array_plr_res[0].__dict__.keys()
-
-        # for k,v in self.array_plr_res[0].__dict__.iteritems():
-            # try:
-                # v_len = len(v)
-            # except TypeError:
-                # v_len = 1
-            # if v_len==1:
-                # self.dict_of_array_result[k] = np.empty(self.n_exp)
-            # else:
-                # self.dict_of_array_result[k] = np.empty((self.n_exp, v_len))
-                
-                
-        # for i,res in enumerate(self.array_plr_res):
-            # # print '-------------------------------'
-            # for k in plr_res_attr:
-                # if k=='poi_name':
-                    # continue
-                # # print i, k, res.__dict__[k]
-                # self.dict_of_array_result[k][i] = res.__dict__[k]
-        # end = timer()
-        # print '::: Time to create result dict:', end - start
-        # return self.dict_of_array_result
-        
-    # def create_data_frame_result(self):
-        # start = timer()
-        # self.data_frame_result = gl.SFrame(self.dict_of_array_result)
-        # end = timer()
-        # print '::: Time to create result data frame:', end - start
-        
-        # self.data_frame_result.save('results/'+self.output_tag + '/' + self.output_file, 'binary')
-        # return self.data_frame_result
-    
-
-# ## need to use deg=3 and filter values outside x range
-# def quadratic_intersections(p, q):
-    # """Given two quadratics p and q, determines the points of intersection"""
-    # x = np.roots(np.asarray(p) - np.asarray(q))
-    # y = np.polyval(p, x)
-    # return x, y
-
-# poly = np.polyfit(res.pois, res.plr, deg=2)
-# y_int  = np.polyval(poly, res.pois)
-# ix_1 = quadratic_intersections(poly, [ 0, 0, 1])
-# ix_4 = quadratic_intersections(poly, [ 0, 0, 4])
-# plt.scatter(*ix_4, marker='x', color='black', s=40, linewidth=2)
-# print ix_1
-# print ix_4
-
-        
-        
-        
-        
+   
